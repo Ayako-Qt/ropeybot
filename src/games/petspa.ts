@@ -145,6 +145,7 @@ export class PetSpa {
 
         this.commandParser.register("residents", this.onCommandResidents);
         this.commandParser.register("freeandleave", this.onCommandFreeAndLeave);
+        this.commandParser.register("test", this.onTestFunction);
     }
 
     public async init(): Promise<void> {
@@ -250,9 +251,9 @@ export class PetSpa {
 
     private onCharacterEnterReception = async (character: API_Character) => {
         this.exitTime.delete(character.MemberNumber);
-        this.conn.SendMessage(
-            "Chat",
-            `Welcome to the Pet Spa, ${character}. Is life getting you down? Why not come and unwind with us? We offer a relaxation experience ` +
+        character.Tell(
+            "Whisper",
+            `(Welcome to the Pet Spa,  ${character}. Is life getting you down? Why not come and unwind with us? We offer a relaxation experience ` +
                 `like no other, where you can be pampered and have your every need taken care of. If you'd like to join, please proceed through ` +
                 `the door behind me into the dressing area and use the blue dressing pad to be permitted into the spa. ` +
                 `Please note that there is a minimum stay of 30 minutes and human speech is strictly prohibited for spa users. ` +
@@ -315,6 +316,75 @@ export class PetSpa {
         );
     };
 
+    private onTestFunction = async (character: API_Character) => {
+        character.Tell(
+            "Whisper",
+            "(whisper holder. For testing purposes only)",
+        );
+
+        await wait(1000);
+
+    
+        const characterHairColor =
+            character.Appearance.InventoryGet("HairFront").GetColor();
+        const characterHairSingleColor =
+            typeof characterHairColor === "object"
+                ? characterHairColor[0]
+                : characterHairColor;
+
+        const petSuitItem = character.Appearance.AddItem(
+            // AssetGet("ItemArms", "ShinyPetSuit"),
+            AssetGet("ItemArms", "HeavyYoke"),
+        );
+        petSuitItem.SetCraft({
+            Name: `Pet Spa Suit`,
+            Description: `A very comfy suit, specially made for ${character} to ensure the wearer complete, uniterrupted relaxation.`,
+        });
+        petSuitItem.SetColor(characterHairColor);
+        petSuitItem.Extended.SetType("Classic");
+
+        // if (character.Appearance.InventoryGet("HairAccessory2") === null) {
+        //     await wait(1000);
+
+        //     character.Tell("Whisper", `(Adding ears...`);
+
+        //     const ears = character.Appearance.AddItem(PET_EARS);
+        //     ears.SetColor(
+        //         character.Appearance.InventoryGet("HairFront").GetColor(),
+        //     );
+
+        //     this.earsAdded.add(character.MemberNumber);
+        // }
+
+        // if (character.Appearance.InventoryGet("TailStraps") === null) {
+        //     await wait(1000);
+
+        //     character.Tell("Whisper", `(Attaching tail...`);
+
+        //     const tail = character.Appearance.AddItem(
+        //         AssetGet("TailStraps", "TailStrap"),
+        //     );
+        //     tail.SetColor(
+        //         character.Appearance.InventoryGet("HairFront").GetColor(),
+        //     );
+
+        //     this.tailAdded.add(character.MemberNumber);
+        // }
+
+        // character.Tell(
+        //     "Whisper",
+        //     "(Thank you, you are now ready to enter the spa! Please approach the door above and it will open for you.",
+        // );
+
+        this.conn.SendMessage(
+            "Emote",
+            `*Emote holder, for testing purposes only: ${character}!`,
+        );
+
+        this.exitTime.set(character.MemberNumber, Date.now() + 30 * 60 * 1000);
+    };
+
+        
     private onCharacterEnterDressingPad = async (character: API_Character) => {
         character.Tell(
             "Whisper",

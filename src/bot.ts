@@ -122,6 +122,7 @@ export async function startBot(): Promise<RopeyBot> {
             break;
         case "petspa":
             console.log("Starting game: Pet Spa");
+            connector.accountUpdate({ Nickname: "Ayayaya Bot" });
             const petSpaGame = new PetSpa(connector);
             await petSpaGame.init();
             connector.setBotDescription(PetSpa.description);
