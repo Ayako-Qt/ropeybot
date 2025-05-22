@@ -22,11 +22,7 @@ import { CommandParser } from "../commandParser";
 import { BC_Server_ChatRoomMessage } from "../logicEvent";
 import { remainingTimeString } from "../util/time";
 import { readFile, writeFile } from "fs/promises";
-import { Perk } from "./battles/perks/perkPack/iPerks";
-import { PerkFactory } from "./battles/perks/perkPack/perksAndFactory";
-import { EventBus } from "./battles/perks/eventBus";
-import { applyDamage, preCalculateDamage } from "./battles/battleActions/attack";
-// import { Perk, PerkFactory } from "./battles/perks";
+import { Perk, PerkFactory } from "./battles/perks";
 
 const RECEPTION_AREA: MapRegion = {
     TopLeft: { X: 13, Y: 11 },
@@ -91,6 +87,8 @@ interface Battle {
     player2Atk: number;
     player1Def: number;
     player2Def: number;
+    player1AttackCombo: number;
+    player2AttackCombo: number;
     player1OnTakenDamage: ((damage: number) => void)[];
     player2OnTakenDamage: ((damage: number) => void)[];
     player1ActivePerks: Map<string, { perk: Perk; rounds: number }>;
@@ -106,12 +104,6 @@ interface Battle {
     selectedNumbers: number[];
     totalSum: number;
     conn: API_Connector;
-    eventBus: any;
-    _roundStartPointListenerAdded: boolean;
-    _player1EndActionListenerAdded: boolean;
-    _player2EndActionListenerAdded: boolean;
-    _roundEndListenerAdded: boolean;
-    _playerSkipActionListenerAdded: boolean;
 }
 
 export class PetSpa {
@@ -205,6 +197,7 @@ export class PetSpa {
 
         this.commandParser.register("residents", this.onCommandResidents);
         this.commandParser.register("freeandleave", this.onCommandFreeAndLeave);
+        this.commandParser.register("test", this.onTestFunction);
         this.commandParser.register("invite", this.onTestSummonBattleInvite);
         this.commandParser.register("accept", this.onTestSummonBattleAccept);
         this.commandParser.register("refuse", this.onTestSummonBattleRefuse);
@@ -463,6 +456,8 @@ export class PetSpa {
             player2Atk: 1,
             player1Def: 0,
             player2Def: 0,
+            player1AttackCombo: 1,
+            player2AttackCombo: 1,
             player1OnTakenDamage: [],
             player2OnTakenDamage: [],
             player1ActivePerks: new Map(),
@@ -477,13 +472,7 @@ export class PetSpa {
             player2Numbers: [],
             selectedNumbers: [],
             totalSum: 0,
-            conn: this.conn,
-            eventBus: new EventBus(),
-            _roundStartPointListenerAdded: false,
-            _player1EndActionListenerAdded: false,
-            _player2EndActionListenerAdded: false,
-            _roundEndListenerAdded: false,
-            _playerSkipActionListenerAdded: false
+            conn: this.conn
         };
 
         // Set the timeout timer
@@ -558,7 +547,10 @@ export class PetSpa {
         //     player2.Tell("Whisper", "(Game will start in 3 seconds...)");
         // }
 
-        // Wait few seconds before starting the game
+        // Wait 3 seconds before starting the game
+        setTimeout(() => {
+            this.startGameLoop(battleId);
+        }, 7000);
         await wait(500);
         this.conn.SendMessage("Chat", `'Under the witness of Goddess Ayako', ${player1} has claim a WAR! towards ${player2}!`);
         await wait(1000);
@@ -569,8 +561,6 @@ export class PetSpa {
         this.conn.SendMessage("Emote", `*all info about ${player2} will be shown in the Emote*`);
         await wait(1500);
         this.conn.SendMessage("Chat", `Round one will soon start! Please Perpared!!!!!`);
-        await wait(1500);
-        this.startGameLoop(battleId);
     };
 
     private startGameLoop = async (battleId: string) => {
@@ -580,88 +570,70 @@ export class PetSpa {
         const player1 = this.conn.chatRoom.getCharacter(battle.player1);
         const player2 = this.conn.chatRoom.getCharacter(battle.player2);
 
-        // roundStart: uhh roundStart just roundStart...
-        if (battle.eventBus && !battle._roundStartPointListenerAdded) {
-            battle.eventBus.on("roundStart", (event: any) => {
-                // add 1 point to each player
-                battle.selectedNumbers = [];
-                battle.player1Points += 1;
-                battle.player2Points += 1;
-                this.conn.SendMessage("Chat", `########################################`);
-                this.conn.SendMessage("Chat", `(a new round starts，each player has received 1 point)`);
-                this.conn.SendMessage("Chat", `########################################`);
-                // only player1 can choose perk
-                battle.player1Numbers = this.generateRandomNumbers(1, 19, 3);
-                // battle.player1Numbers = [13,14,15];
-                // this.conn.SendMessage("Chat", `Player1's options: ${battle.player1Numbers.join(", ")}`);
-                const currentPlayerOptions = battle.player1Numbers;
-                const optionsText = currentPlayerOptions.map((num, index) => {
-                    const perk = PerkFactory.createPerk(num, (msg, isEmote) => {
-                        this.conn.SendMessage("Chat", msg);
-                    });
-                    if (!perk) return `${index + 1}. No perk available`;
-                    return `${index + 1}. ${perk.name} - ${perk.description} (Cost: ${perk.cost} points)`;
-                }).join('\n');
-                this.conn.SendMessage("Chat", `Round ${battle.currentRound} - 【【${player1?.Name}】】's turn\n\nAvailable perks:\n${optionsText}\n\nPlease select a perk by typing /bot pick 1 2 or 3.\nuse /bot shuffle to shuffle the perks with 1 point\n-------------------------\n\n`);
-            });
-            battle._roundStartPointListenerAdded = true;
+        // Add 1 point to both players at the start of each round
+        battle.player1Points += 1;
+        battle.player2Points += 1;
+        await wait(1500);
+        this.conn.SendMessage("Chat", `(Both players gain 1 point at the start of the round.)`);
+
+        // Show both players' currently active perks
+        if (battle.player1ActivePerks.size > 0) {
+            const perkList = Array.from(battle.player1ActivePerks.entries())
+                .map(([id, data]) => `${data.perk.name} (${data.rounds} rounds left)`)
+                .join(', ');
+            this.conn.SendMessage("Chat", `${player1?.Name}'s active perks: ${perkList}`);
         }
-        // player1EndAction: generate perk for player2, not adding points
-        if (battle.eventBus && !battle._player1EndActionListenerAdded) {
-            battle.eventBus.on("player1EndAction", (event: any) => {
-                // only generate perk for player2, not adding points
-                battle.player2Numbers = this.generateRandomNumbers(1, 19, 3);
-                // battle.player2Numbers = [16,17,18];
-                const currentPlayerOptions = battle.player2Numbers;
-                const optionsText = currentPlayerOptions.map((num, index) => {
-                    const perk = PerkFactory.createPerk(num, (msg, isEmote) => {
-                        this.conn.SendMessage("Emote", `*${msg}*`);
-                    });
-                    if (!perk) return `${index + 1}. No perk available`;
-                    return `${index + 1}. ${perk.name} - ${perk.description} (Cost: ${perk.cost} points)`;
-                }).join('\n');
-                this.conn.SendMessage("Emote", `*Round ${battle.currentRound} - 【【${player2?.Name}】】's turn\n\nAvailable perks:\n${optionsText}\n\nPlease select a perk by typing /bot pick 1 2 or 3.\nuse /bot shuffle to shuffle the perks with 1 point\n-------------------------\n\n`);
-            });
-            battle._player1EndActionListenerAdded = true;
+
+        if (battle.player2ActivePerks.size > 0) {
+            const perkList = Array.from(battle.player2ActivePerks.entries())
+                .map(([id, data]) => `${data.perk.name} (${data.rounds} rounds left)`)
+                .join(', ');
+            this.conn.SendMessage("Emote", `*${player2?.Name}'s active perks: ${perkList}*`);
         }
-        // player2EndAction: emit roundEnd
-        if (battle.eventBus && !battle._player2EndActionListenerAdded) {
-            battle.eventBus.on("player2EndAction", (event: any) => {
-                battle.eventBus.emit({ type: "roundEnd", battle });
-            });
-            battle._player2EndActionListenerAdded = true;
-        }
-        // roundEnd: start a new round
-        if (battle.eventBus && !battle._roundEndListenerAdded) {
-            battle.eventBus.on("roundEnd", (event: any) => {
-                setImmediate(() => this.startGameLoop(battle.id));
-            });
-            battle._roundEndListenerAdded = true;
-        }
-        // playerSkipAction: add 2 points to the player who skipped
-        if (battle.eventBus && !battle._playerSkipActionListenerAdded) {
-            battle.eventBus.on("playerSkipAction", (event: any) => {
-                const skipPlayer = event.player;
-                if (skipPlayer === battle.player1) {
-                    battle.player1Points += 2;
-                    this.conn.SendMessage("Chat", `(${player1?.Name} skipped the attack phase and gained 2 points!)`);
-                    battle.currentPlayer = battle.player2;
-                    battle.eventBus.emit({ type: "player1EndAction", battle });
-                } else {
-                    battle.player2Points += 2;
-                    this.conn.SendMessage("Emote", `*${player2?.Name} skipped the attack phase and gained 2 points!*`);
-                    battle.currentPlayer = battle.player1;
-                    battle.currentRound++;
-                    battle.eventBus.emit({ type: "player2EndAction", battle });
-                }
-                battle.selectedNumbers = [];
-                this.battles.set(battle.id, battle);
-            });
-            battle._playerSkipActionListenerAdded = true;
-        }
+
         // Trigger the onRoundStart effect for all active perks
-        if (battle.eventBus) {
-            battle.eventBus.emit({ type: "roundStart", player1: battle.player1, player2: battle.player2, battle });
+        battle.player1ActivePerks.forEach((data) => {
+            if (data.perk.onRoundStart) {
+                data.perk.onRoundStart(battle.player1, battle.player2, battle);
+            }
+        });
+
+        battle.player2ActivePerks.forEach((data) => {
+            if (data.perk.onRoundStart) {
+                data.perk.onRoundStart(battle.player1, battle.player2, battle);
+            }
+        });
+
+        // Generate new random numbers
+        battle.player1Numbers = this.generateRandomNumbers(1, 14, 3);
+        battle.player2Numbers = this.generateRandomNumbers(1, 14, 3);
+        battle.selectedNumbers = [];
+        battle.totalSum = 0;
+
+        // Show the perk options for the current round
+        const currentPlayer = battle.currentPlayer === battle.player1 ? player1?.Name : player2?.Name;
+        const otherPlayer = battle.currentPlayer === battle.player1 ? player2?.Name : player1?.Name;
+        this.conn.SendMessage("Chat", `Round ${battle.currentRound} starts! ${currentPlayer} will pick first, then ${otherPlayer}.*`);
+
+        // Show the current player's available perk options
+        const currentPlayerOptions = battle.currentPlayer === battle.player1 ? battle.player1Numbers : battle.player2Numbers;
+        const optionsText = currentPlayerOptions.map((num, index) => {
+            const perk = PerkFactory.createPerk(num, (msg, isEmote) => {
+                if (isEmote) {
+                    this.conn.SendMessage("Emote", `*${msg}*`);
+                } else {
+                    this.conn.SendMessage("Chat", msg);
+                }
+            });
+            if (!perk) return `${index + 1}. No perk available`;
+            return `${index + 1}. ${perk.name} - ${perk.description} (Cost: ${perk.cost} points)`;
+        }).join('\n');
+
+        // Send options to the current player
+        if (battle.currentPlayer === battle.player1) {
+            this.conn.SendMessage("Chat", `Round ${battle.currentRound} - Player1's turn\n\nAvailable perks:\n${optionsText}\n\nPlease select a perk by typing its number.`);
+        } else {
+            this.conn.SendMessage("Emote", `*Round ${battle.currentRound} - Player2's turn\n\nAvailable perks:\n${optionsText}\n\nPlease select a perk by typing its number.*`);
         }
     };
 
@@ -1041,18 +1013,20 @@ export class PetSpa {
             return;
         }
 
+        // Check if the player has already picked a number
+        if (battle.selectedNumbers.length > 0 && 
+            battle.selectedNumbers[battle.selectedNumbers.length - 1] === 
+            (battle.currentPlayer === battle.player1 ? battle.player1Numbers[index - 1] : battle.player2Numbers[index - 1])) {
+            this.conn.reply(msg, "You have already picked a number in this round");
+            return;
+        }
+
         // Get the selected number
         const selectedNumber = battle.currentPlayer === battle.player1 ? 
             battle.player1Numbers[index - 1] : 
             battle.player2Numbers[index - 1];
 
-        // Check if the player has already picked a number
-        if (battle.selectedNumbers.includes(selectedNumber)) {
-            this.conn.reply(msg, "You have already picked this number in this round");
-            return;
-        }
-
-        // Get the current player's points
+        // Check if the player has enough points
         const currentPlayerPoints = battle.currentPlayer === battle.player1 ? battle.player1Points : battle.player2Points;
         const perk = PerkFactory.createPerk(selectedNumber, (msg, isEmote) => {
             if (isEmote) {
@@ -1077,31 +1051,19 @@ export class PetSpa {
             } else {
                 battle.player2Points -= perk.cost;
             }
+            
             // Ensure the battle object contains the conn property
             if (!battle.conn) {
                 battle.conn = this.conn;
             }
-            // Register the perk with the event bus (event-driven system)
-            if (battle.eventBus && typeof perk.register === 'function') {
-                perk.register(battle.eventBus, battle.currentPlayer, battle);
-            }
-            // sync to activePerks
-            const instanceId = perk.getInstanceId();
-            if (perk.name === "【Soul Absorbing】") {
-                // 不要加到picker自己身上
-                // 由register自动加到对手activePerks
-            } else {
-                if (battle.currentPlayer === battle.player1) {
-                    battle.player1ActivePerks.set(instanceId, { perk, rounds: perk.duration ?? -1 });
-                } else {
-                    battle.player2ActivePerks.set(instanceId, { perk, rounds: perk.duration ?? -1 });
-                }
-            }
+            
+            perk.effect(battle.player1, battle.player2, battle);
+            
             // Determine the message type based on the current player
             if (battle.currentPlayer === battle.player1) {
-                this.conn.SendMessage("Chat", `(${sender.Name} picked ${perk.name}: ${perk.description} (Cost: ${perk.cost} points) (${battle.player1Points} left)\n-- you can now pick more perks or use /bot attack to attack your opponent, or use /bot skip to skip your turn and get 2 more points\n-------------------------`);
+                this.conn.SendMessage("Chat", `(${sender.Name} picked ${perk.name}: ${perk.description} (Cost: ${perk.cost} points))`);
             } else {
-                this.conn.SendMessage("Emote", `*${sender.Name} picked ${perk.name}: ${perk.description} (Cost: ${perk.cost} points) (${battle.player2Points} left)\n-- you can now pick more perks or use /bot attack to attack your opponent, or use /bot skip to skip your turn and get 2 more points\n------------------------`);
+                this.conn.SendMessage("Emote", `*${sender.Name} picked ${perk.name}: ${perk.description} (Cost: ${perk.cost} points)*`);
             }
         } else {
             // Determine the message type based on the current player
@@ -1113,6 +1075,13 @@ export class PetSpa {
                 this.conn.SendMessage("Chat", `this should not happen. Please report bug to Ayako or the other Qt s .  ppe-2`);
 
             }
+        }
+
+        // Prompt the player that they can now use the attack command
+        if (battle.currentPlayer === battle.player1) {
+            this.conn.SendMessage("Chat", `(${sender.Name}, you can now pick more perks or use /bot attack to attack your opponent)`);
+        } else {
+            this.conn.SendMessage("Emote", `*${sender.Name}, you can now pick more perks or use /bot attack to attack your opponent*`);
         }
 
         // Update the battle state
@@ -1144,60 +1113,82 @@ export class PetSpa {
         // Get the attacker's attack and combo values
         const isPlayer1 = battle.player1 === sender.MemberNumber;
         const attackerAtk = isPlayer1 ? battle.player1Atk : battle.player2Atk;
+        const attackerCombo = isPlayer1 ? battle.player1AttackCombo : battle.player2AttackCombo;
+        const defenderHp = isPlayer1 ? battle.player2Hp : battle.player1Hp;
         const defenderId = isPlayer1 ? battle.player2 : battle.player1;
         const defenderDef = isPlayer1 ? battle.player2Def : battle.player1Def;
         const defender = this.conn.chatRoom.getCharacter(defenderId);
 
         // Calculate total damage (considering defense)
-    
-        const attackerId = sender.MemberNumber;
-        const targetId = defenderId;
-        const finalDamage = preCalculateDamage(battle, defenderId, attackerAtk, "normalAttack", sender.MemberNumber, this.conn, false);
-        // Send damage and HP message if conn and attackerId provided
-        if (this.conn && attackerId !== undefined) {
-            const attacker = this.conn.chatRoom.getCharacter(attackerId);
-            const defender = this.conn.chatRoom.getCharacter(targetId);
-            
-            if (isPlayer1) {
-                this.conn.SendMessage(
-                    "Chat",
-                    `(${attacker?.Name} attack, cause ${finalDamage} in total damage!)`
-                );
-                this.conn.SendMessage(
-                    "Emote",
-                    `*${defender?.Name}'s HP: ${targetId === battle.player1 ? battle.player1Hp - finalDamage : battle.player2Hp - finalDamage}*`
-                );
-            } else {
-                this.conn.SendMessage(
-                    "Emote",
-                    `*${attacker?.Name} attack, cause ${finalDamage} in total damage!)*`
-                );
-                this.conn.SendMessage(
-                    "Chat",
-                    `(${defender?.Name}'s HP: ${targetId === battle.player1 ? battle.player1Hp - finalDamage : battle.player2Hp - finalDamage})`
-                );
-            }
-        }
-        applyDamage(battle, defenderId, attackerAtk, "normalAttack", sender.MemberNumber, this.conn, false);
+        const totalDamage = Math.max(0, attackerAtk * attackerCombo - defenderDef);
 
-        battle.selectedNumbers = [];
-        this.battles.set(battleId, battle);
-
+        // Reduce the opponent's HP
         if (isPlayer1) {
-            // After player1 attacks, switch to player2, do not start new round
+            battle.player2Hp -= totalDamage;
+            // Call all on-taken-damage callbacks
+            battle.player2OnTakenDamage.forEach(callback => callback(totalDamage));
+            this.conn.SendMessage("Chat", `(${sender.Name} attack ${attackerCombo} times, cause ${totalDamage} in total damage!)`);
+            this.conn.SendMessage("Emote", `*${defender?.Name}'s HP: ${defenderHp - totalDamage}*`);
+        } else {
+            battle.player1Hp -= totalDamage;
+            // Call all on-taken-damage callbacks
+            battle.player1OnTakenDamage.forEach(callback => callback(totalDamage));
+            this.conn.SendMessage("Emote", `*${sender.Name} attack ${attackerCombo} times, cause ${totalDamage} in total damage!*`);
+            this.conn.SendMessage("Chat", `(${defender?.Name}'s HP: ${defenderHp - totalDamage})`);
+        }
+
+        // Check if the victory condition is met
+        if (battle.player1Hp <= 0 || battle.player2Hp <= 0) {
+            const winnerId = battle.player1Hp <= 0 ? battle.player2 : battle.player1;
+            const winner = this.conn.chatRoom.getCharacter(winnerId);
+            this.conn.SendMessage("Chat", `Game over! ${winner?.Name} wins!`);
+            this.onGameEnd(battle.player1, battle.player2, winnerId);
+            return;
+        }
+
+        // Update the current player
+        if (isPlayer1) {
+            // After player1 attacks, switch to player2
             battle.currentPlayer = battle.player2;
-            if (battle.eventBus) {
-                battle.eventBus.emit({ type: "player1EndAction", battle });
+            const nextPlayer = this.conn.chatRoom.getCharacter(battle.player2);
+            if (nextPlayer) {
+                // Ensure the battle object contains the conn property
+                if (!battle.conn) {
+                    battle.conn = this.conn;
+                }
+                
+                // Show player2's perk options
+                const player2Options = battle.player2Numbers.map((num, index) => {
+                    const perk = PerkFactory.createPerk(num, (msg, isEmote) => {
+                        if (isEmote) {
+                            this.conn.SendMessage("Emote", `*${msg}*`);
+                        } else {
+                            this.conn.SendMessage("Chat", msg);
+                        }
+                    });
+                    return perk ? `${index + 1}. ${perk.name} - ${perk.description} (Cost: ${perk.cost} points)` : `${index + 1}. No perk available`;
+                }).join('\n');
+                this.conn.SendMessage("Emote", `*${nextPlayer.Name}'s options:\n${player2Options}*`);
+                this.conn.SendMessage("Emote", `*${nextPlayer.Name}'s turn to pick a perk and attack*`);
             }
         } else {
-            // After player2 attacks, switch to player1 and start a new round
+            // After player2 attacks, end the round and start a new round with player1
             battle.currentPlayer = battle.player1;
             battle.currentRound++;
-            if (battle.eventBus) {
-                battle.eventBus.emit({ type: "player2EndAction", battle });
+            
+            // Ensure the battle object contains the conn property
+            if (!battle.conn) {
+                battle.conn = this.conn;
             }
+            
+            this.startGameLoop(battleId);
         }
-       
+        
+        // Clear the selected numbers
+        battle.selectedNumbers = [];
+        
+        // Update the battle state
+        this.battles.set(battleId, battle);
     };
 
     private onStatus = async (
@@ -1297,7 +1288,67 @@ export class PetSpa {
         this.conn.reply(msg, statusMessage);
     };
 
+    private onTestFunction = async (
+        sender: API_Character,
+        msg: BC_Server_ChatRoomMessage,
+        args: string[],
+    ) => {
+        const testBattles = {
+            id: 10101991191,
+            player1: 167616,
+            player2: 170130,
+            status: 'ongoing',
+            player1Score: 0,
+            player2Score: 0,
+            player1Hp: 20,
+            player2Hp: 20,
+            player1Points: 5,
+            player2Points: 5,
+            player1Atk: 1,
+            player2Atk: 1,
+            player1Def: 0,
+            player2Def: 0,
+            player1AttackCombo: 1,
+            player2AttackCombo: 1,
+            player1OnTakenDamage: [],
+            player2OnTakenDamage: [],
+            player1ActivePerks: new Map(),
+            player2ActivePerks: new Map(),
+            basePointsPerRound: 0,
+            timeoutTimer: null,
+            surrender: false,
+            currentRound: 1,
+            currentPlayer: 167616,
+            player1Numbers: [],
+            player2Numbers: [],
+            selectedNumbers: [],
+            totalSum: 0,
+            conn: this.conn
+        };
+        
+        const player1Id = parseInt(args[0]);
+        const player2Id = parseInt(args[1]);
+        const perkNumber = parseInt(args[2]);
 
+        testBattles.player1 = player1Id;
+        testBattles.player2 = player2Id;
+        testBattles.currentPlayer = player1Id;
+        testBattles.player1Numbers.push(perkNumber);
+        testBattles.player2Numbers.push(perkNumber);
+        const perk = PerkFactory.createPerk(perkNumber, (msg, isEmote) => {
+            if (isEmote) {
+                this.conn.SendMessage("Emote", `*${msg}*`);
+            } else {
+                this.conn.SendMessage("Chat", msg);
+            }
+        });
+
+        if (perk) {
+            perk.effect(player1Id, player2Id, testBattles);
+        }
+
+        this.conn.SendMessage("Chat", `testBattles: ${JSON.stringify(testBattles)}`);
+    };
 
     private onShuffle = async (
         sender: API_Character,
@@ -1358,14 +1409,13 @@ export class PetSpa {
 
         // Send options to current player
         if (battle.currentPlayer === battle.player1) {
-            this.conn.SendMessage("Chat", `You spent 1 point to shuffle. Here are your new options:\n${optionsText}\n\nPlease select a perk by typing /bot pick number.`);
+            this.conn.SendMessage("Chat", `You spent 1 point to shuffle. Here are your new options:\n${optionsText}\n\nPlease select a perk by typing its number.`);
         } else {
-            this.conn.SendMessage("Emote", `*You spent 1 point to shuffle. Here are your new options:\n${optionsText}\n\nPlease select a perk by typing /bot pick number.*`);
+            this.conn.SendMessage("Emote", `*You spent 1 point to shuffle. Here are your new options:\n${optionsText}\n\nPlease select a perk by typing its number.*`);
         }
 
         // Update the battle state
         this.battles.set(battleId, battle);
-        battle.selectedNumbers = [];
     };
 
     private onSkip = async (
@@ -1390,10 +1440,49 @@ export class PetSpa {
             return;
         }
 
-        // event-driven: emit playerSkipAction event
-        if (battle.eventBus) {
-            battle.eventBus.emit({ type: "playerSkipAction", player: sender.MemberNumber, battle });
+        // Give 2 points to the current player
+        if (battle.currentPlayer === battle.player1) {
+            battle.player1Points += 2;
+        } else {
+            battle.player2Points += 2;
         }
+        //consider combine with the previuos block, but this might cause some issues. so keep it for now.
+        if (battle.currentPlayer === battle.player1) {
+            this.conn.SendMessage("Chat", `(${sender.Name} skipped the attack phase and gained 2 points!)`);
+        } else {
+            this.conn.SendMessage("Emote", `*${sender.Name} skipped the attack phase and gained 2 points!*`);
+        }
+
+        // End turn logic, same as after attack
+        if (battle.currentPlayer === battle.player1) {
+            // Switch to player2
+            battle.currentPlayer = battle.player2;
+            battle.selectedNumbers = [];
+            const nextPlayer = this.conn.chatRoom.getCharacter(battle.player2);
+            if (nextPlayer) {
+                const player2Options = battle.player2Numbers.map((num, index) => {
+                    const perk = PerkFactory.createPerk(num, (msg, isEmote) => {
+                        if (isEmote) {
+                            this.conn.SendMessage("Emote", `*${msg}*`);
+                        } else {
+                            this.conn.SendMessage("Chat", msg);
+                        }
+                    });
+                    return perk ? `${index + 1}. ${perk.name} - ${perk.description} (Cost: ${perk.cost} points)` : `${index + 1}. No perk available`;
+                }).join('\n');
+                this.conn.SendMessage("Emote", `*${nextPlayer.Name}'s options:\n${player2Options}*`);
+                this.conn.SendMessage("Emote", `*${nextPlayer.Name}'s turn to pick a perk and attack*`);
+            }
+        } else {
+            // player2 skip, new round for player1
+            battle.currentPlayer = battle.player1;
+            battle.currentRound++;
+            battle.selectedNumbers = [];
+            this.startGameLoop(battleId);
+        }
+
+        // Update the battle state
+        this.battles.set(battleId, battle);
     };
 
     private onTalk = async (
